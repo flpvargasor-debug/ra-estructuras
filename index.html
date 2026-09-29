@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>RA Estructuras</title>
+<meta name="theme-color" content="#16202a">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<style>
+  :root{
+    --bg:#101820; --panel:#16202a; --panel2:#1e2b38; --line:#2c3d4e;
+    --txt:#e8eef3; --mut:#93a4b3; --acc:#f07a1a; --acc2:#3fa7d6; --ok:#4cc38a; --warn:#e5b53a; --err:#e5534b;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);
+    font:15px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overflow:hidden}
+  button,select,input{font:inherit;color:inherit}
+  button{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 12px;min-height:44px;cursor:pointer}
+  button:active{transform:scale(.97)}
+  button.pri{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:600}
+  button.sec{background:#1d3a4c;border-color:var(--acc2)}
+  button:disabled{opacity:.4}
+  #app{position:fixed;inset:0;display:flex;flex-direction:column}
+  header{display:flex;align-items:center;gap:10px;padding:10px 16px;padding-top:max(10px,env(safe-area-inset-top));background:var(--panel);border-bottom:1px solid var(--line)}
+  header h1{font-size:16px;margin:0;flex:1}
+  header .badge{font-size:12px;padding:3px 8px;border-radius:99px;background:var(--panel2);color:var(--mut)}
+  header .badge.on{color:var(--ok)}
+  #view{position:relative;flex:1;min-height:0}
+  #view canvas{display:block;width:100%;height:100%;touch-action:none}
+  #legend{position:absolute;left:10px;top:10px;background:#16202acc;border:1px solid var(--line);border-radius:10px;padding:8px 10px;font-size:13px;pointer-events:none}
+  #legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}
+  #panel{background:var(--panel);border-top:1px solid var(--line);padding:12px 16px;padding-bottom:max(12px,env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:10px;max-height:52vh;overflow:auto}
+  .row{display:flex;gap:8px;flex-wrap:wrap}
+  .row>button{flex:1}
+  .info{font-size:13px;color:var(--mut)}
+  .info b{color:var(--txt);font-weight:600}
+  .msg{font-size:13px;padding:8px 10px;border-radius:8px;background:var(--panel2);border-left:3px solid var(--acc2)}
+  .msg.warn{border-left-color:var(--warn)} .msg.err{border-left-color:var(--err)}
+  details{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px 10px}
+  details summary{cursor:pointer;font-weight:600}
+  details .opts{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;align-items:center;font-size:13px}
+  select,input[type=number]{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px;min-height:40px;width:100%}
+  label.chk{display:flex;gap:8px;align-items:center}
+  #help ol{margin:6px 0 0;padding-left:20px;font-size:13px;color:var(--mut)}
+  #help li{margin-bottom:4px}
+
+  /* ---------- Overlay RA ---------- */
+  #ar{position:fixed;inset:0;display:none;pointer-events:none;color:#fff;font-size:14px}
+  #ar.on{display:block}
+  #ar .top{pointer-events:auto;position:absolute;left:0;right:0;top:0;padding:10px 12px;padding-top:max(10px,env(safe-area-inset-top));
+    background:linear-gradient(#000a,#0000);display:flex;gap:8px;align-items:flex-start}
+  #arStatus{flex:1;background:#000a;border-radius:10px;padding:8px 10px;font-size:14px}
+  #arStatus small{display:block;color:#cfd8df;font-size:12px}
+  #ar .bottom{pointer-events:auto;position:absolute;left:0;right:0;bottom:0;padding:10px 12px;padding-bottom:max(12px,env(safe-area-inset-bottom));
+    background:linear-gradient(#0000,#000c 30%);display:flex;flex-direction:column;gap:8px}
+  #ar button{background:#1e2b38e6;border-color:#ffffff33;color:#fff;min-height:46px}
+  #ar button.pri{background:var(--acc);border-color:var(--acc)}
+  #ar button.sec{background:#1d3a4ce6;border-color:var(--acc2)}
+  #ar .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+  #ar .grid button{min-height:40px;padding:6px 4px;font-size:13px}
+  #ar .lbl{font-size:12px;color:#cfd8df;margin:2px 0 -2px}
+  #ar .tabs{display:flex;gap:6px}
+  #ar .tabs button{flex:1;min-height:38px;font-size:13px}
+  #ar .tabs button.act{background:var(--acc2);border-color:var(--acc2)}
+  #ar input[type=range]{width:100%}
+  #ar .hide{display:none!important}
+  #cross{position:absolute;left:50%;top:50%;width:26px;height:26px;margin:-13px 0 0 -13px;pointer-events:none;opacity:.8}
+  #cross:before,#cross:after{content:"";position:absolute;background:#fff;box-shadow:0 0 2px #000}
+  #cross:before{left:12px;top:0;width:2px;height:26px}
+  #cross:after{top:12px;left:0;height:2px;width:26px}
+</style>
+<script type="importmap">
+{ "imports": {
+    "three": "./vendor/three.module.min.js",
+    "three/addons/": "./vendor/addons/"
+} }
+</script>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>RA Estructuras</h1>
+    <span class="badge" id="netBadge">—</span>
+  </header>
+  <div id="view">
+    <div id="legend">
+      <div><i style="background:#f07a1a"></i>Proyectado</div>
+      <div><i style="background:#7fc4e8"></i>Existente (referencia)</div>
+      <div><i style="background:#e5534b"></i>Origen A · eje +X hacia B</div>
+    </div>
+  </div>
+  <div id="panel">
+    <div class="info" id="modelInfo">Cargando…</div>
+    <div id="msgs"></div>
+    <div class="row">
+      <button id="btnOpen">Abrir modelo…</button>
+      <button id="btnDemo">Ejemplo</button>
+    </div>
+    <button class="pri" id="btnAR" disabled>Iniciar realidad aumentada</button>
+    <details>
+      <summary>Opciones de importación</summary>
+      <div class="opts">
+        <span>Unidades (OBJ)</span>
+        <select id="optUnits"><option value="1">metros</option><option value="0.01">centímetros</option><option value="0.001">milímetros</option><option value="0.0254">pulgadas</option></select>
+        <span>Eje vertical (OBJ)</span>
+        <select id="optUp"><option value="z">Z arriba</option><option value="y">Y arriba</option></select>
+        <span>Nombre capa existente</span>
+        <input id="optKey" type="text" value="EXIST" style="background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px;min-height:40px">
+        <span>Dist. A–B en modelo [m]</span>
+        <input id="optAB" type="number" step="0.01" min="0" placeholder="opcional">
+      </div>
+      <div class="info" style="margin-top:6px">Si un OBJ aparece "acostado", cambia el eje vertical y toca Volver a aplicar. Los .dae y .glb traen unidades y ejes en el archivo.</div>
+      <div class="row" style="margin-top:8px"><button id="btnReload">Volver a aplicar</button><button id="btnOrigin">Mover origen a esquina</button></div>
+    </details>
+    <details id="help">
+      <summary>Cómo calzar el modelo</summary>
+      <ol>
+        <li>En el modelo, deja el <b>origen (0,0,0)</b> en un punto físico reconocible (p. ej. esquina de columna existente a nivel de piso) = <b>punto A</b>.</li>
+        <li>Elige un <b>punto B</b> sobre el eje <b>+X</b> (rojo en SketchUp), idealmente a varios metros de A (otra columna).</li>
+        <li>En RA, apunta la cruz al punto A real y toca <b>Fijar A</b>; luego al punto B real y toca <b>Fijar B</b>. El modelo queda posicionado y orientado.</li>
+        <li>Afina con los botones de rotación / desplazamiento. Usa la capa existente (celeste) para verificar el calce.</li>
+        <li>Nombra en el modelo los grupos o materiales de la estructura existente con <b>EXISTENTE</b> para que se muestren como referencia.</li>
+      </ol>
+    </details>
+  </div>
+</div>
+
+<input type="file" id="file" multiple accept=".glb,.gltf,.dae,.obj,.mtl,.bin,.png,.jpg,.jpeg,.tga,.bmp" style="display:none">
+
+<!-- Overlay RA (dom-overlay) -->
+<div id="ar">
+  <div id="cross"></div>
+  <div class="top">
+    <div id="arStatus">Iniciando…</div>
+    <button id="arExit">Salir</button>
+  </div>
+  <div class="bottom">
+    <div id="arPlace">
+      <div class="row">
+        <button class="pri" id="arSetA" disabled>Fijar A</button>
+        <button class="pri hide" id="arSetB" disabled>Fijar B</button>
+        <button class="sec" id="arQuick" disabled title="Coloca en A mirando hacia ti">Colocar solo en A</button>
+      </div>
+    </div>
+    <div id="arAdjust" class="hide">
+      <div class="tabs">
+        <button id="tabRot" class="act">Girar</button>
+        <button id="tabMove">Mover</button>
+        <button id="tabView">Vista</button>
+        <button id="arRedo">Recalzar</button>
+      </div>
+      <div id="pRot">
+        <div class="lbl">Giro en torno a A (vertical)</div>
+        <div class="grid">
+          <button data-rot="-1">−1°</button><button data-rot="-0.1">−0,1°</button>
+          <button data-rot="0.1">+0,1°</button><button data-rot="1">+1°</button>
+        </div>
+      </div>
+      <div id="pMove" class="hide">
+        <div class="lbl">Paso: <span id="stepLbl">1 cm</span> · ejes del modelo</div>
+        <div class="grid">
+          <button data-mv="x-">X −</button><button data-mv="x+">X +</button>
+          <button data-mv="z-">Y −</button><button data-mv="z+">Y +</button>
+          <button data-mv="y-">Bajar</button><button data-mv="y+">Subir</button>
+          <button id="stepBtn">Paso</button><button id="resetAdj">Reset</button>
+        </div>
+      </div>
+      <div id="pView" class="hide">
+        <div class="lbl">Opacidad proyectado</div>
+        <input type="range" id="opProj" min="0.1" max="1" step="0.05" value="0.85">
+        <div class="lbl">Opacidad existente</div>
+        <input type="range" id="opExist" min="0" max="1" step="0.05" value="0.35">
+        <div class="row" style="margin-top:6px">
+          <button id="tgExist">Ocultar existente</button>
+          <button id="tgEdges">Solo aristas</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

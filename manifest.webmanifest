@@ -1,0 +1,15 @@
+{
+  "name": "RA Estructuras",
+  "short_name": "RA Estructuras",
+  "description": "Superpone una estructura proyectada sobre la existente con realidad aumentada, sin conexión.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#101820",
+  "theme_color": "#16202a",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
