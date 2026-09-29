@@ -33,3 +33,25 @@ En el repositorio solo queda la app y el modelo de ejemplo. **Tus modelos no se 
 5. Si en Opciones ingresas la distancia A–B del modelo, la app la compara con la medida en terreno (sirve para chequear el seguimiento).
 
 Precisión esperable sin marcadores: del orden de centímetros cerca de A, y la deriva crece al alejarse. Es para revisión visual y detección de interferencias gruesas, no para replanteo.
+
+## 5. Oclusión (que lo real tape al modelo)
+En la pestaña **Vista**:
+- **Existente: oclusión**: la estructura existente del modelo se vuelve invisible, pero tapa lo proyectado que queda detrás de ella. Es preciso si el calce es bueno. Úsalo después de calzar en modo "referencia".
+- **Profundidad cámara**: si el celular entrega profundidad (ARCore Depth), cualquier objeto real (personas, equipos, cañerías) tapa al modelo. Es aproximado: bordes irregulares y alcance útil de unos 5 a 8 m.
+
+## 6. Modo gafas VR (visor tipo Cardboard)
+1. Calza el modelo en modo normal (A, B y ajuste fino).
+2. Activa la **rotación automática** del teléfono y gíralo a horizontal.
+3. Toca **Gafas VR** (arriba). La pantalla se divide en dos, una imagen por ojo.
+4. Pon el teléfono en el visor. Para volver al modo normal, toca la pantalla o el botón del visor.
+
+En Opciones puedes ajustar la separación de ojos (64 mm por defecto) y el zoom. Si la imagen de la cámara aparece de cabeza, activa "Imagen de cámara invertida".
+El teléfono tiene una sola cámara, así que el fondo real se ve plano (sin 3D) y solo el modelo tiene profundidad. Requiere que el equipo entregue la imagen de la cámara a Chrome ("camera-access").
+
+## 7. Foto 360
+1. Toca **Foto 360** y elige la foto (una esfera completa 2:1 o una franja panorámica).
+2. Ingresa dónde se tomó, en coordenadas del modelo: **Cámara X, Y** (m, respecto del origen A) y **Altura del lente** (m).
+3. Gira el **Rumbo** hasta que una columna o arista conocida coincida. Si la foto quedó torcida, corrige la **Inclinación** o el **Alabeo**.
+4. Arrastra con un dedo para mirar alrededor y pellizca para acercar. **Giroscopio** te deja mirar moviendo el teléfono, y **Gafas VR** divide la pantalla.
+5. **Guardar imagen** descarga una captura en PNG para tus informes.
+La foto y el calce quedan guardados en el teléfono y se reabren con el botón Foto 360.

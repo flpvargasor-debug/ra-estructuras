@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="es" data-v="10">
+<html lang="es" data-v="11">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
@@ -71,6 +71,13 @@
   #ar.nosurf #arPlace button{opacity:.6}
   #ar button{touch-action:manipulation;user-select:none;-webkit-user-select:none}
   #cross{position:absolute;left:50%;top:50%;width:26px;height:26px;margin:-13px 0 0 -13px;pointer-events:none;opacity:.8}
+  /* foto 360 */
+  #panoPanel label{display:flex;flex-direction:column;gap:3px;color:var(--mut)}
+  #panoPanel .row>button{min-height:40px;font-size:13px;padding:6px}
+  body.pano #btnAR, body.pano #legend{display:none}
+  body.panovr header, body.panovr #panel{display:none}
+  #vrHint{position:fixed;left:50%;bottom:12px;transform:translateX(-50%);background:#000a;color:#fff;padding:6px 12px;border-radius:99px;font-size:13px;display:none;pointer-events:none}
+  body.panovr #vrHint{display:block}
   #cross:before,#cross:after{content:"";position:absolute;background:#fff;box-shadow:0 0 2px #000}
   #cross:before{left:12px;top:0;width:2px;height:26px}
   #cross:after{top:12px;left:0;height:2px;width:26px}
@@ -85,7 +92,7 @@
 <body>
 <div id="app">
   <header>
-    <h1>RA Estructuras <span style="font-weight:400;color:var(--mut);font-size:12px">v10</span></h1>
+    <h1>RA Estructuras <span style="font-weight:400;color:var(--mut);font-size:12px">v11</span></h1>
     <span class="badge" id="netBadge">—</span>
   </header>
   <div id="view">
@@ -102,8 +109,37 @@
     <div class="row">
       <button id="btnOpen">Abrir modelo…</button>
       <button id="btnDemo">Ejemplo</button>
+      <button id="btnPano">Foto 360</button>
     </div>
     <button class="pri" id="btnAR" disabled>Iniciar realidad aumentada</button>
+    <div id="panoPanel" style="display:none;flex-direction:column;gap:8px">
+      <div class="info"><b>Foto 360</b> · <span id="panoInfo"></span></div>
+      <div class="opts" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;font-size:12px">
+        <label>Cámara X [m]<input id="pX" type="number" step="0.05" value="0"></label>
+        <label>Cámara Y [m]<input id="pY" type="number" step="0.05" value="-3"></label>
+        <label>Altura lente [m]<input id="pZ" type="number" step="0.05" value="1.5"></label>
+        <label>Rumbo [°]<input id="pH" type="number" step="0.1" value="0"></label>
+        <label>Inclinación [°]<input id="pP" type="number" step="0.1" value="0"></label>
+        <label>Alabeo [°]<input id="pR" type="number" step="0.1" value="0"></label>
+      </div>
+      <div class="row">
+        <button data-ph="-5">Rumbo −5°</button><button data-ph="-0.5">−0,5°</button><button data-ph="0.5">+0,5°</button><button data-ph="5">+5°</button>
+      </div>
+      <div class="info">Opacidad proyectado</div>
+      <input type="range" id="pOp" min="0.1" max="1" step="0.05" value="0.85">
+      <div class="row">
+        <button id="pExist">Existente: referencia</button>
+        <button id="pGyro">Giroscopio: no</button>
+      </div>
+      <div class="row">
+        <button class="sec" id="pVR">Gafas VR</button>
+        <button id="pShot">Guardar imagen</button>
+      </div>
+      <div class="row">
+        <button id="pChange">Cambiar foto…</button>
+        <button id="pExit">Salir de foto 360</button>
+      </div>
+    </div>
     <details>
       <summary>Opciones de importación</summary>
       <div class="opts">
@@ -143,9 +179,11 @@
   </div>
 </div>
 
+<input type="file" id="panoFile" accept="image/*" style="display:none">
 <input type="file" id="file" multiple accept=".glb,.gltf,.dae,.obj,.mtl,.bin,.png,.jpg,.jpeg,.tga,.bmp" style="display:none">
 
 <!-- Overlay RA (dom-overlay) -->
+<div id="vrHint">Toca la pantalla para salir de las gafas</div>
 <div id="ar">
   <div id="cross"></div>
   <div class="top">
@@ -202,6 +240,6 @@
   </div>
 </div>
 
-<script type="module" src="app.js?v=10"></script>
+<script type="module" src="app.js?v=11"></script>
 </body>
 </html>

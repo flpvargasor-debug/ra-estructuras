@@ -1,5 +1,5 @@
 // Service worker: guarda la app completa para uso sin conexión.
-const CACHE = 'ra-estructuras-v10';
+const CACHE = 'ra-estructuras-v11';
 const FILES = [
   './', 'index.html', 'app.js', 'manifest.webmanifest', 'demo.glb',
   'icons/icon-192.png', 'icons/icon-512.png',
@@ -7,7 +7,7 @@ const FILES = [
   'vendor/addons/controls/OrbitControls.js',
   'vendor/addons/loaders/GLTFLoader.js', 'vendor/addons/loaders/ColladaLoader.js',
   'vendor/addons/loaders/OBJLoader.js', 'vendor/addons/loaders/MTLLoader.js',
-  'vendor/addons/loaders/TGALoader.js', 'vendor/addons/utils/BufferGeometryUtils.js',
+  'vendor/addons/loaders/TGALoader.js', 'vendor/addons/utils/BufferGeometryUtils.js', 'vendor/addons/effects/StereoEffect.js',
 ];
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES)).then(() => self.skipWaiting()));

@@ -5,8 +5,9 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { ColladaLoader } from 'three/addons/loaders/ColladaLoader.js';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { MTLLoader } from 'three/addons/loaders/MTLLoader.js';
+import { StereoEffect } from 'three/addons/effects/StereoEffect.js';
 
-const APP_VERSION = '10';
+const APP_VERSION = '11';
 const $ = (id) => document.getElementById(id) || document.createElement('div'); // tolerante a un index.html desactualizado
 const DEG = Math.PI / 180;
 
@@ -662,6 +663,175 @@ function trackingCheck(frame) {
   }
 }
 
+// ---------------------------------------------------------------- FOTO 360
+// La foto se proyecta en una esfera (equirectangular 2:1) o en un cilindro (panorama en franja) centrados en la posición
+// de la cámara; el modelo se dibuja desde ese mismo punto, así que queda fijo sobre la foto.
+const stereo = new StereoEffect(renderer);
+const pano = { on: false, vr: false, gyro: false, mesh: null, tex: null, file: null, aspect: 2,
+  yaw: 0, pitch: 0, fov: 70, devQ: null, gyroOff: new THREE.Quaternion() };
+const panoHolder = new THREE.Group(); scene.add(panoHolder);
+const P_R = 800; // radio de la esfera de la foto [m]
+
+function panoCalib() {
+  return { x: +$('pX').value || 0, y: +$('pY').value || 0, z: +$('pZ').value || 0,
+           h: +$('pH').value || 0, p: +$('pP').value || 0, r: +$('pR').value || 0 };
+}
+function panoApply() {
+  const c = panoCalib();
+  // ejes SketchUp (X, Y, Z arriba) -> escena (x, y arriba, -z)
+  panoHolder.position.set(c.x, c.z, -c.y);
+  panoHolder.rotation.set(c.p * DEG, c.h * DEG, c.r * DEG, 'YXZ');
+  camera.position.copy(panoHolder.position);
+  if (pano.file) DB.set('pano', { name: pano.file.name, buffer: pano.file.buffer, calib: c });
+}
+async function panoLoad(file, calib) {
+  const blob = new Blob([file.buffer]);
+  const bmp = await createImageBitmap(blob);
+  const w = bmp.width, h = bmp.height, aspect = w / h;
+  // límite de textura del equipo: se reduce si hace falta
+  const max = renderer.capabilities.maxTextureSize;
+  // se pasa siempre por un canvas (con ImageBitmap three.js no invierte el eje vertical)
+  const sc = Math.min(1, max / w);
+  const src = document.createElement('canvas'); src.width = Math.round(w * sc); src.height = Math.round(h * sc);
+  src.getContext('2d').drawImage(bmp, 0, 0, src.width, src.height); bmp.close && bmp.close();
+  if (pano.tex) pano.tex.dispose();
+  pano.tex = new THREE.Texture(src); pano.tex.colorSpace = THREE.SRGBColorSpace; pano.tex.needsUpdate = true;
+  pano.tex.generateMipmaps = false; pano.tex.minFilter = THREE.LinearFilter;
+  if (pano.mesh) { panoHolder.remove(pano.mesh); pano.mesh.geometry.dispose(); }
+  let geo, kind, vfov;
+  if (aspect <= 2.2) {                          // esfera completa (equirectangular)
+    geo = new THREE.SphereGeometry(P_R, 96, 48); kind = 'esfera completa'; vfov = 180 / (aspect / 2);
+    if (aspect < 1.9) { const ang = Math.min(Math.PI, (2 * Math.PI) / aspect); geo = new THREE.SphereGeometry(P_R, 96, 48, 0, Math.PI * 2, Math.PI / 2 - ang / 2, ang); }
+  } else {                                      // franja (panorama cilíndrico)
+    const H = 2 * Math.PI * P_R / aspect;
+    geo = new THREE.CylinderGeometry(P_R, P_R, H, 180, 1, true);
+    vfov = 2 * Math.atan(Math.PI / aspect) / DEG; kind = 'franja horizontal';
+  }
+  geo.scale(-1, 1, 1);                          // se ve desde adentro
+  pano.mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: pano.tex, depthWrite: false, depthTest: false }));
+  pano.mesh.renderOrder = -100; pano.mesh.frustumCulled = false;
+  panoHolder.add(pano.mesh);
+  pano.file = file; pano.aspect = aspect;
+  $('panoInfo').textContent = `${file.name} · ${w}×${h} px · ${kind} · cobertura vertical ≈ ${Math.round(Math.min(180, vfov))}°`;
+  if (calib) for (const k of ['x', 'y', 'z', 'h', 'p', 'r']) $('p' + k.toUpperCase()).value = calib[k];
+  panoApply();
+  if (aspect > 2.2 && vfov < 50) msg(`La foto cubre solo unos ${Math.round(vfov)}° en vertical: aléjate de la estructura al tomarla o sostén el celular en vertical para cubrir más.`, 'warn');
+}
+function panoEnter() {
+  pano.on = true; document.body.classList.add('pano');
+  $('panoPanel').style.display = 'flex';
+  controls.enabled = false; grid.visible = false; scene.background = new THREE.Color(0x000000);
+  camera.far = Math.max(camera.far, P_R * 2); camera.near = 0.05; camera.fov = pano.fov; camera.updateProjectionMatrix();
+  panoHolder.visible = true;
+  panoApply();
+  // vista inicial: mirando hacia el punto A
+  const t = new THREE.Vector3(0, camera.position.y, 0).sub(camera.position);
+  pano.yaw = Math.atan2(-t.x, -t.z); pano.pitch = 0;
+}
+function panoExit() {
+  pano.on = false; setPanoVR(false); setGyro(false); document.body.classList.remove('pano');
+  $('panoPanel').style.display = 'none';
+  controls.enabled = true; grid.visible = true; scene.background = previewBg; panoHolder.visible = false;
+  camera.fov = 55; setModel && state.box && (() => { const b = state.box, r = Math.max(b.getSize(new THREE.Vector3()).length(), 2), c = b.getCenter(new THREE.Vector3());
+    camera.near = r / 500; camera.far = r * 50; controls.target.copy(c); camera.position.copy(c).add(new THREE.Vector3(0.7, 0.55, 0.9).multiplyScalar(r)); })();
+  camera.updateProjectionMatrix();
+}
+function panoUpdate() {
+  if (pano.gyro && pano.devQ) {
+    camera.quaternion.copy(pano.gyroOff).multiply(pano.devQ);
+  } else {
+    camera.quaternion.setFromEuler(new THREE.Euler(pano.pitch, pano.yaw, 0, 'YXZ'));
+  }
+}
+// mirar alrededor: arrastrar (1 dedo) y acercar (2 dedos / rueda)
+{
+  const el = renderer.domElement; const pts = new Map(); let pinch0 = 0, fov0 = 70;
+  el.addEventListener('pointerdown', (e) => { if (!pano.on) return; pts.set(e.pointerId, { x: e.clientX, y: e.clientY }); el.setPointerCapture(e.pointerId);
+    if (pts.size === 2) { const [a, b] = [...pts.values()]; pinch0 = Math.hypot(a.x - b.x, a.y - b.y); fov0 = camera.fov; } });
+  el.addEventListener('pointermove', (e) => {
+    if (!pano.on || !pts.has(e.pointerId)) return;
+    const prev = pts.get(e.pointerId); const dx = e.clientX - prev.x, dy = e.clientY - prev.y;
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pts.size === 1 && !pano.gyro) {
+      const k = camera.fov * DEG / el.clientHeight;
+      pano.yaw += dx * k; pano.pitch = Math.max(-1.5, Math.min(1.5, pano.pitch + dy * k));
+    } else if (pts.size === 2) {
+      const [a, b] = [...pts.values()]; const d = Math.hypot(a.x - b.x, a.y - b.y);
+      if (pinch0 > 0) { camera.fov = Math.max(15, Math.min(100, fov0 * pinch0 / d)); pano.fov = camera.fov; camera.updateProjectionMatrix(); }
+    }
+  });
+  const up = (e) => { pts.delete(e.pointerId); if (pts.size < 2) pinch0 = 0; };
+  el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up);
+  el.addEventListener('wheel', (e) => { if (!pano.on) return; e.preventDefault();
+    camera.fov = Math.max(15, Math.min(100, camera.fov * (e.deltaY > 0 ? 1.08 : 0.93))); pano.fov = camera.fov; camera.updateProjectionMatrix(); }, { passive: false });
+}
+// giroscopio (orientación del teléfono)
+const _zee = new THREE.Vector3(0, 0, 1), _qDev = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5));
+function onDevOri(e) {
+  if (e.alpha == null) return;
+  const orient = ((screen.orientation && screen.orientation.angle) || window.orientation || 0) * DEG;
+  const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(e.beta * DEG, e.alpha * DEG, -e.gamma * DEG, 'YXZ'));
+  q.multiply(_qDev).multiply(new THREE.Quaternion().setFromAxisAngle(_zee, -orient));
+  if (!pano.devQ) { // primera lectura: se conserva la dirección de vista actual
+    const yawDev = new THREE.Euler().setFromQuaternion(q, 'YXZ').y;
+    pano.gyroOff.setFromAxisAngle(new THREE.Vector3(0, 1, 0), pano.yaw - yawDev);
+  }
+  pano.devQ = q;
+}
+async function setGyro(on) {
+  if (on && typeof DeviceOrientationEvent !== 'undefined' && DeviceOrientationEvent.requestPermission) {
+    try { if (await DeviceOrientationEvent.requestPermission() !== 'granted') on = false; } catch { on = false; }
+  }
+  pano.gyro = on; pano.devQ = null;
+  if (on) addEventListener('deviceorientation', onDevOri); else {
+    removeEventListener('deviceorientation', onDevOri);
+    const e = new THREE.Euler().setFromQuaternion(camera.quaternion, 'YXZ'); pano.yaw = e.y; pano.pitch = e.x;
+  }
+  $('pGyro').textContent = on ? 'Giroscopio: sí' : 'Giroscopio: no';
+}
+function setPanoVR(on) {
+  pano.vr = on; document.body.classList.toggle('panovr', on);
+  if (on) {
+    try { document.documentElement.requestFullscreen && document.documentElement.requestFullscreen().then(() => screen.orientation && screen.orientation.lock && screen.orientation.lock('landscape').catch(() => {})).catch(() => {}); } catch {}
+    if (!pano.gyro) setGyro(true);
+  } else {
+    try { document.fullscreenElement && document.exitFullscreen(); } catch {}
+    renderer.setScissorTest(false);
+  }
+  setTimeout(resize, 300);
+}
+renderer.domElement.addEventListener('click', () => { if (pano.vr) setPanoVR(false); });
+
+$('btnPano').onclick = async () => {
+  if (pano.file) return panoEnter();
+  const saved = await DB.get('pano');
+  if (saved && saved.buffer) { await panoLoad(saved, saved.calib); return panoEnter(); }
+  $('panoFile').click();
+};
+$('pChange').onclick = () => $('panoFile').click();
+$('panoFile').onchange = async (e) => {
+  const f = e.target.files[0]; if (!f) return; e.target.value = '';
+  try { await panoLoad({ name: f.name, buffer: await f.arrayBuffer() }); panoEnter(); }
+  catch (err) { msg('No se pudo abrir la foto: ' + (err.message || err), 'err'); }
+};
+$('pExit').onclick = panoExit;
+for (const id of ['pX', 'pY', 'pZ', 'pH', 'pP', 'pR']) $(id).addEventListener('input', panoApply);
+for (const b of document.querySelectorAll('[data-ph]')) b.onclick = () => { $('pH').value = (+$('pH').value + +b.dataset.ph).toFixed(1); panoApply(); };
+$('pOp').oninput = (e) => { state.opProj = +e.target.value; applyVisual(); };
+$('pExist').onclick = () => { state.existMode = { ref: 'occ', occ: 'off', off: 'ref' }[state.existMode];
+  $('pExist').textContent = { ref: 'Existente: referencia', occ: 'Existente: oclusión', off: 'Existente: oculta' }[state.existMode]; applyVisual(); };
+$('pGyro').onclick = () => setGyro(!pano.gyro);
+$('pVR').onclick = () => setPanoVR(true);
+$('pShot').onclick = () => {
+  panoUpdate(); renderer.render(scene, camera);
+  renderer.domElement.toBlob((b) => {
+    if (!b) return msg('No se pudo generar la imagen.', 'err');
+    const a = document.createElement('a'); a.href = URL.createObjectURL(b);
+    a.download = `foto360_${(pano.file && pano.file.name || 'vista').replace(/\.[^.]+$/, '')}_${Date.now()}.png`;
+    document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  }, 'image/png');
+};
+
 // ---------------------------------------------------------------- bucle
 const tmpM = new THREE.Matrix4();
 let loopErr = false;
@@ -670,6 +840,7 @@ renderer.setAnimationLoop((t, frame) => {
     console.error(err);
     if (!loopErr) { loopErr = true; state.depthWanted = false; occ.uDepthOn.value = 0; arStatus('Se produjo un error y desactivé la profundidad.', String(err.message || err)); }
   }
+  if (!frame && pano.on && pano.vr) { stereo.setEyeSeparation((parseFloat($('optIPD').value) || 64) / 1000); stereo.render(scene, camera); return; }
   if (vr.on && frame) {
     try { if (renderStereo(frame)) return; } catch (err) { console.error(err); setStereo(false); arStatus('No se pudo dibujar el modo gafas.', String(err.message || err)); }
   }
@@ -713,6 +884,8 @@ function tick(frame) {
       }
     }
     trackingCheck(frame);
+  } else if (pano.on) {
+    panoUpdate();
   } else {
     controls.update();
   }
@@ -762,4 +935,4 @@ $('btnReset').onclick = resetApp;
 })();
 
 // acceso para pruebas
-window.__ra = { testStereo: (sess, frame) => { const prev = xrSession, prevRef = refSpace; xrSession = sess; try { return renderStereo(frame); } finally { xrSession = prev; refSpace = prevRef; vr.binding = null; } }, state, scene, modelRoot, ar, placer, resetPlacement, occ, THREE, camera, renderer, applyVisual, fakeHit: (x, y, z) => { goodHit = { matrix: new THREE.Matrix4().makeTranslation(x, y, z), t: performance.now() }; } };
+window.__ra = { pano, panoLoad, panoEnter, panoExit, testStereo: (sess, frame) => { const prev = xrSession, prevRef = refSpace; xrSession = sess; try { return renderStereo(frame); } finally { xrSession = prev; refSpace = prevRef; vr.binding = null; } }, state, scene, modelRoot, ar, placer, resetPlacement, occ, THREE, camera, renderer, applyVisual, fakeHit: (x, y, z) => { goodHit = { matrix: new THREE.Matrix4().makeTranslation(x, y, z), t: performance.now() }; } };
