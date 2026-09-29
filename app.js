@@ -6,7 +6,8 @@ import { ColladaLoader } from 'three/addons/loaders/ColladaLoader.js';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { MTLLoader } from 'three/addons/loaders/MTLLoader.js';
 
-const $ = (id) => document.getElementById(id);
+const APP_VERSION = '5';
+const $ = (id) => document.getElementById(id) || document.createElement('div'); // tolerante a un index.html desactualizado
 const DEG = Math.PI / 180;
 
 // ---------------------------------------------------------------- escena
@@ -320,16 +321,18 @@ async function checkXR() {
 
 $('btnAR').onclick = async () => {
   try {
-    const wantDepth = $('optDepth').checked;
+    const wantDepth = !!$('optDepth').checked;
     const opts = { requiredFeatures: ['hit-test'], optionalFeatures: ['dom-overlay', 'anchors'], domOverlay: { root: $('ar') } };
     if (wantDepth) {
       opts.optionalFeatures.push('depth-sensing');
       opts.depthSensing = { usagePreference: ['cpu-optimized'], dataFormatPreference: ['luminance-alpha', 'float32'] };
     }
     const session = await navigator.xr.requestSession('immersive-ar', opts);
-    startAR(session);
+    try { await startAR(session); } catch (e) { try { await session.end(); } catch {} throw e; }
   } catch (err) {
-    console.error(err); msg('No se pudo iniciar la RA: ' + (err.message || err), 'err');
+    console.error(err);
+    const t = String(err && (err.name + ': ' + err.message) || err);
+    msg('No se pudo iniciar la RA (' + t + '). Cierra Chrome por completo (desde apps recientes) y vuelve a abrir la app; si persiste, reinicia el teléfono.', 'err');
   }
 };
 
@@ -580,6 +583,9 @@ $('btnReset').onclick = resetApp;
 // ---------------------------------------------------------------- inicio
 (async () => {
   resize();
+  const hv = document.documentElement.dataset.v;
+  $('netBadge').title = 'v' + APP_VERSION;
+  if (hv !== APP_VERSION) msg(`Archivos de versiones distintas (index.html v${hv || '?'}, app.js v${APP_VERSION}). Sube los 3 archivos juntos a GitHub, espera 2 minutos y recarga.`, 'warn');
   if (new URLSearchParams(location.search).has('reset')) return resetApp();
   checkXR();
   const o = await DB.get('opts');

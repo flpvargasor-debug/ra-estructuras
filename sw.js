@@ -1,5 +1,5 @@
 // Service worker: guarda la app completa para uso sin conexión.
-const CACHE = 'ra-estructuras-v4';
+const CACHE = 'ra-estructuras-v5';
 const FILES = [
   './', 'index.html', 'app.js', 'manifest.webmanifest', 'demo.glb',
   'icons/icon-192.png', 'icons/icon-512.png',
