@@ -6,7 +6,7 @@ import { ColladaLoader } from 'three/addons/loaders/ColladaLoader.js';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { MTLLoader } from 'three/addons/loaders/MTLLoader.js';
 
-const APP_VERSION = '8';
+const APP_VERSION = '9';
 const $ = (id) => document.getElementById(id) || document.createElement('div'); // tolerante a un index.html desactualizado
 const DEG = Math.PI / 180;
 
@@ -509,7 +509,9 @@ function updateDepth(frame) {
   occ.uUvT.value.fromArray(di.normDepthBufferFromNormView.matrix);
   const P = view.projectionMatrix; occ.uProj.value.set(P[10], P[14]);
   const bl = xrSession.renderState.baseLayer;
-  if (bl) { const v = bl.getViewport(view); occ.uRes.value.set(v.width, v.height); }
+  const xrT = renderer.getRenderTarget();
+  if (xrT) occ.uRes.value.set(xrT.width, xrT.height);
+  else if (bl) { const v = bl.getViewport(view); occ.uRes.value.set(v.width, v.height); }
   occ.uDepthOn.value = 1;
 }
 
@@ -568,8 +570,11 @@ function renderStereo(frame) {
   const glTex = vr.binding.getCameraImage(view.camera); if (!glTex) return false;
   renderer.properties.get(vr.camTex).__webglTexture = glTex;   // textura de la cámara (válida solo en este cuadro)
 
+  // tamaño del búfer de RA: con "capas" WebXR no existe baseLayer, así que se toma del destino de dibujo de three.js
+  const xrT = renderer.getRenderTarget();
   const bl = xrSession.renderState.baseLayer;
-  const W = bl.framebufferWidth, H = bl.framebufferHeight;
+  const W = xrT ? xrT.width : (bl ? bl.framebufferWidth : renderer.getContext().drawingBufferWidth);
+  const H = xrT ? xrT.height : (bl ? bl.framebufferHeight : renderer.getContext().drawingBufferHeight);
   if (!vr.rt || vr.rt.width !== W || vr.rt.height !== H) {
     if (vr.rt) vr.rt.dispose();
     vr.rt = new THREE.WebGLRenderTarget(W, H, { depthBuffer: true });
