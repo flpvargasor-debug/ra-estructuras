@@ -64,6 +64,7 @@ function msg(text, kind = '') {
 function clearMsgs() { msgs.innerHTML = ''; }
 
 // ---------------------------------------------------------------- persistencia (IndexedDB, opcional)
+const withTimeout = (pr, ms, fb) => Promise.race([pr, new Promise(r => setTimeout(() => r(fb), ms))]);
 const DB = {
   open() {
     return new Promise((res, rej) => {
@@ -74,11 +75,13 @@ const DB = {
       } catch (e) { rej(e); }
     });
   },
-  async get(k) {
+  get(k) { return withTimeout(this._get(k), 2500, undefined); },
+  set(k, v) { return withTimeout(this._set(k, v), 4000, undefined); },
+  async _get(k) {
     try { const db = await this.open(); return await new Promise((res) => { const q = db.transaction('kv').objectStore('kv').get(k); q.onsuccess = () => res(q.result); q.onerror = () => res(undefined); }); }
     catch { return undefined; }
   },
-  async set(k, v) {
+  async _set(k, v) {
     try { const db = await this.open(); await new Promise((res) => { const t = db.transaction('kv', 'readwrite'); t.objectStore('kv').put(v, k); t.oncomplete = res; t.onerror = res; }); }
     catch { /* sin almacenamiento: se ignora */ }
   },
@@ -275,7 +278,7 @@ async function checkXR() {
     const why = !window.isSecureContext ? 'La página no está en HTTPS; la RA requiere una dirección segura.'
       : 'Este navegador o equipo no ofrece RA WebXR. En Android usa Chrome y verifica que estén instalados los "Servicios de Google Play para RA".';
     $('btnAR').textContent = 'RA no disponible aquí';
-    msg(why + ' La vista 3D sí funciona para revisar el modelo.', 'warn');
+    $('xrMsg').innerHTML = ''; const d = document.createElement('div'); d.className = 'msg warn'; d.textContent = why + ' La vista 3D sí funciona para revisar el modelo.'; $('xrMsg').appendChild(d);
   }
 }
 
@@ -448,14 +451,37 @@ if ('serviceWorker' in navigator && window.isSecureContext) {
   navigator.serviceWorker.register('sw.js').catch(err => console.warn('SW', err));
 }
 
+// ---------------------------------------------------------------- errores visibles en pantalla
+addEventListener('error', (e) => msg('Error: ' + (e.message || e.error), 'err'));
+addEventListener('unhandledrejection', (e) => msg('Error: ' + ((e.reason && e.reason.message) || e.reason), 'err'));
+
+// ---------------------------------------------------------------- restablecer (borra modelo guardado y caché)
+async function resetApp() {
+  try { await withTimeout(new Promise((res) => { const r = indexedDB.deleteDatabase('ra-estructuras'); r.onsuccess = r.onerror = r.onblocked = res; }), 3000); } catch {}
+  try { for (const k of await caches.keys()) await caches.delete(k); } catch {}
+  try { for (const r of await navigator.serviceWorker.getRegistrations()) await r.unregister(); } catch {}
+  location.replace(location.pathname);
+}
+$('btnReset').onclick = resetApp;
+
 // ---------------------------------------------------------------- inicio
 (async () => {
   resize();
+  if (new URLSearchParams(location.search).has('reset')) return resetApp();
+  checkXR();
   const o = await DB.get('opts');
   if (o) { $('optUnits').value = o.units || '1'; $('optUp').value = o.up || 'z'; $('optKey').value = o.key || 'EXIST'; $('optAB').value = o.ab || ''; }
+  // Si la vez anterior la app se cerró mientras abría el modelo guardado, no se reintenta (evita quedar bloqueada).
+  const crashed = await DB.get('loading');
   const saved = await DB.get('files');
-  if (saved && saved.length) await openFiles(saved, false); else await loadDemo();
-  await checkXR();
+  if (saved && saved.length && !crashed) {
+    await DB.set('loading', true);
+    await openFiles(saved, false);
+    await DB.set('loading', false);
+  } else {
+    await loadDemo();
+    if (crashed) { await DB.set('loading', false); msg('La última vez la app se cerró al abrir el modelo guardado, así que esta vez cargué el ejemplo. Si el modelo es muy pesado, simplifícalo antes de volver a abrirlo.', 'warn'); }
+  }
 })();
 
 // acceso para pruebas

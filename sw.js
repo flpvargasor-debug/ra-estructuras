@@ -1,5 +1,5 @@
 // Service worker: guarda la app completa para uso sin conexión.
-const CACHE = 'ra-estructuras-v1';
+const CACHE = 'ra-estructuras-v2';
 const FILES = [
   './', 'index.html', 'app.js', 'manifest.webmanifest', 'demo.glb',
   'icons/icon-192.png', 'icons/icon-512.png',
@@ -16,14 +16,19 @@ self.addEventListener('activate', (e) => {
   e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
     .then(() => self.clients.claim()));
 });
+// Red primero (así siempre llega la última versión); si no hay conexión, se usa lo guardado.
 self.addEventListener('fetch', (e) => {
-  if (e.request.method !== 'GET') return;
-  e.respondWith(
-    caches.match(e.request, { ignoreSearch: true }).then((hit) => hit || fetch(e.request).then((r) => {
-      if (r.ok && new URL(e.request.url).origin === location.origin) {
-        const copy = r.clone(); caches.open(CACHE).then((c) => c.put(e.request, copy));
-      }
+  const req = e.request;
+  if (req.method !== 'GET' || new URL(req.url).origin !== location.origin) return;
+  e.respondWith((async () => {
+    try {
+      const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 4000); // señal débil: no esperar más de 4 s
+      const r = await fetch(req, { cache: 'no-cache', signal: ctl.signal }); clearTimeout(t);
+      if (r.ok) { const c = await caches.open(CACHE); c.put(req, r.clone()); }
       return r;
-    }).catch(() => caches.match('index.html')))
-  );
+    } catch {
+      return (await caches.match(req, { ignoreSearch: true }))
+        || (req.mode === 'navigate' ? await caches.match('index.html') : Response.error());
+    }
+  })());
 });
