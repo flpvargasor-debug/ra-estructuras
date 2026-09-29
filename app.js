@@ -6,8 +6,7 @@ import { ColladaLoader } from 'three/addons/loaders/ColladaLoader.js';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { MTLLoader } from 'three/addons/loaders/MTLLoader.js';
 
-const APP_VERSION = '5';
-const $ = (id) => document.getElementById(id) || document.createElement('div'); // tolerante a un index.html desactualizado
+const $ = (id) => document.getElementById(id);
 const DEG = Math.PI / 180;
 
 // ---------------------------------------------------------------- escena
@@ -56,7 +55,7 @@ const state = {
   files: [],            // [{name, buffer:ArrayBuffer}]
   name: '',
   existMeshes: [], projMeshes: [], edges: [],
-  opProj: 0.85, opExist: 0.35, existMode: 'ref', edgesOnly: false, depthWanted: true,
+  opProj: 0.85, opExist: 0.35, showExist: true, edgesOnly: false,
 };
 const msgs = $('msgs');
 function msg(text, kind = '') {
@@ -139,40 +138,8 @@ function isExisting(o, key) {
   return mats.some(m => m && m.name && re.test(m.name));
 }
 
-// ---- Oclusión por profundidad real (API Depth Sensing de WebXR, si el equipo la ofrece)
-// Cada fragmento del modelo se descarta si está más lejos que lo que mide la cámara en ese píxel.
-const occ = {
-  uDepthTex: { value: null }, uUvT: { value: new THREE.Matrix4() }, uRes: { value: new THREE.Vector2(1, 1) },
-  uProj: { value: new THREE.Vector2(-1, -0.2) }, uDepthOn: { value: 0 }, uMargin: { value: 0.10 },
-};
-const OCC_GLSL = `
-uniform sampler2D uDepthTex; uniform mat4 uUvT; uniform vec2 uRes; uniform vec2 uProj; uniform float uDepthOn; uniform float uMargin;
-void occlusionTest() {
-  if (uDepthOn < 0.5) return;
-  vec2 nv = vec2(gl_FragCoord.x / uRes.x, 1.0 - gl_FragCoord.y / uRes.y);   // coords. de vista normalizadas (origen arriba-izq.)
-  vec2 duv = (uUvT * vec4(nv, 0.0, 1.0)).xy;
-  if (duv.x < 0.0 || duv.x > 1.0 || duv.y < 0.0 || duv.y > 1.0) return;
-  float real = texture(uDepthTex, duv).r;                                    // metros
-  if (real <= 0.0) return;                                                   // sin dato: no ocultar
-  float zn = gl_FragCoord.z * 2.0 - 1.0;
-  float d = uProj.y / (zn + uProj.x);                                        // profundidad del modelo en metros
-  if (d > real * 1.03 + uMargin) discard;
-}`;
-function addOcclusion(mat) {
-  mat.onBeforeCompile = (sh) => {
-    Object.assign(sh.uniforms, occ);
-    sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\n' + OCC_GLSL)
-      .replace('void main() {', 'void main() {\n  occlusionTest();');
-  };
-  mat.customProgramCacheKey = () => 'occ1';
-  return mat;
-}
 const existMat = new THREE.MeshBasicMaterial({ color: 0x7fc4e8, transparent: true, opacity: 0.35, depthWrite: false, side: THREE.DoubleSide });
 const edgeMat = new THREE.LineBasicMaterial({ color: 0xbfe6ff, transparent: true, opacity: 0.9 });
-// Modo "oclusión": la estructura existente del modelo es invisible pero tapa lo proyectado que queda detrás.
-const occluderMat = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: true, side: THREE.DoubleSide });
-addOcclusion(existMat); addOcclusion(edgeMat);
 
 function setModel(obj, name) {
   modelRoot.clear();
@@ -189,7 +156,7 @@ function setModel(obj, name) {
       o.material = existMat; o.renderOrder = 1; state.existMeshes.push(o);
     } else {
       const mats = (Array.isArray(o.material) ? o.material : [o.material]).map(m => {
-        const c = m.clone(); c.transparent = true; c.opacity = state.opProj; c.side = THREE.DoubleSide; return addOcclusion(c);
+        const c = m.clone(); c.transparent = true; c.opacity = state.opProj; c.side = THREE.DoubleSide; return c;
       });
       o.material = Array.isArray(o.material) ? mats : mats[0];
       o.renderOrder = 2; state.projMeshes.push(o);
@@ -267,17 +234,13 @@ for (const id of ['optUnits', 'optUp', 'optKey', 'optAB']) $(id).addEventListene
 
 // ---------------------------------------------------------------- visual
 function applyVisual() {
-  const mode = state.existMode; // 'ref' referencia · 'occ' oclusión · 'off' oculta
-  existMat.opacity = state.opExist; existMat.visible = !state.edgesOnly; existMat.needsUpdate = true;
-  edgeMat.visible = mode === 'ref';
-  for (const m of state.existMeshes) {
-    m.material = mode === 'occ' ? occluderMat : existMat;
-    m.renderOrder = mode === 'occ' ? -1 : 1;
-    m.visible = mode !== 'off';
-  }
+  existMat.opacity = state.opExist; existMat.visible = state.showExist && !state.edgesOnly;
+  existMat.needsUpdate = true;
+  edgeMat.visible = state.showExist;
   for (const m of state.projMeshes) {
     for (const mt of (Array.isArray(m.material) ? m.material : [m.material])) { mt.opacity = state.opProj; mt.transparent = state.opProj < 1; }
   }
+  for (const m of state.existMeshes) m.visible = state.showExist;
 }
 
 // ---------------------------------------------------------------- vista previa
@@ -321,18 +284,14 @@ async function checkXR() {
 
 $('btnAR').onclick = async () => {
   try {
-    const wantDepth = !!$('optDepth').checked;
-    const opts = { requiredFeatures: ['hit-test'], optionalFeatures: ['dom-overlay', 'anchors'], domOverlay: { root: $('ar') } };
-    if (wantDepth) {
-      opts.optionalFeatures.push('depth-sensing');
-      opts.depthSensing = { usagePreference: ['cpu-optimized'], dataFormatPreference: ['luminance-alpha', 'float32'] };
-    }
-    const session = await navigator.xr.requestSession('immersive-ar', opts);
-    try { await startAR(session); } catch (e) { try { await session.end(); } catch {} throw e; }
+    const session = await navigator.xr.requestSession('immersive-ar', {
+      requiredFeatures: ['hit-test'],
+      optionalFeatures: ['dom-overlay', 'anchors'],
+      domOverlay: { root: $('ar') },
+    });
+    startAR(session);
   } catch (err) {
-    console.error(err);
-    const t = String(err && (err.name + ': ' + err.message) || err);
-    msg('No se pudo iniciar la RA (' + t + '). Cierra Chrome por completo (desde apps recientes) y vuelve a abrir la app; si persiste, reinicia el teléfono.', 'err');
+    console.error(err); msg('No se pudo iniciar la RA: ' + (err.message || err), 'err');
   }
 };
 
@@ -347,12 +306,8 @@ async function startAR(session) {
   $('ar').classList.add('on');
   resetPlacement();
   session.addEventListener('end', endAR);
-  session.addEventListener('select', onScreenTap);
-  state.depthAvail = !!session.depthUsage;
-  updDepthBtn();
 }
 function endAR() {
-  occ.uDepthOn.value = 0;
   hitSource = null; xrSession = null; anchor = null;
   $('ar').classList.remove('on');
   scene.background = previewBg; grid.visible = true;
@@ -361,18 +316,9 @@ function endAR() {
   modelRoot.visible = true; originMarker.visible = true;
   resize();
 }
-
-// Los toques sobre los paneles no generan "select" de RA; un toque en cualquier otra parte de la pantalla fija el punto.
-for (const el of document.querySelectorAll('#ar .top, #ar .bottom')) el.addEventListener('beforexrselect', (e) => e.preventDefault());
-function onScreenTap() {
-  if (ar.phase === 'A') fixA(); else if (ar.phase === 'B') fixB();
-}
-// Botones de la capa RA: se atienden al levantar el dedo (más fiable que "click" dentro de la sesión RA).
-let lastTap = 0; // compartido: evita que el "click" que sigue al toque caiga en otro botón que aparece en el mismo lugar
-function tap(el, fn) {
-  const run = (e) => { const n = performance.now(); if (n - lastTap < 350) return; lastTap = n; e.preventDefault(); e.stopPropagation(); fn(e); };
-  el.addEventListener('pointerup', run); el.addEventListener('click', run);
-}
+$('arExit').onclick = () => xrSession && xrSession.end();
+// que los toques en la interfaz no se interpreten como gestos de RA
+$('ar').addEventListener('beforexrselect', (e) => e.preventDefault());
 
 function resetPlacement() {
   ar.phase = 'A'; ar.A = ar.B = null; ar.yaw = ar.dx = ar.dy = ar.dz = 0;
@@ -381,29 +327,21 @@ function resetPlacement() {
   modelRoot.visible = false; originMarker.visible = false;
   markA.visible = abLine.visible = false;
   show('arPlace', true); show('arAdjust', false); show('arSetA', true); show('arSetB', false); show('arQuick', true);
-  arStatus('Apunta la cruz al <b>punto A</b> real (origen del modelo) y toca <b>Fijar A</b> o la pantalla.', 'Mueve el celular lento apuntando al piso hasta que aparezca el círculo.');
+  arStatus('Apunta la cruz al <b>punto A</b> real (origen del modelo) y toca <b>Fijar A</b>.', 'Mueve el celular lento apuntando al piso hasta que aparezca el círculo.');
 }
 
-let goodHit = null; // último punto válido y su instante
-function hitPos() {
-  if (!goodHit || performance.now() - goodHit.t > 1500) return null;
-  return new THREE.Vector3().setFromMatrixPosition(goodHit.matrix);
-}
-function noSurface() {
-  arStatus('Aún no se detecta el piso en la cruz.', 'Mueve el celular lento, de lado a lado, apuntando a una superficie con textura y buena luz.');
-  navigator.vibrate && navigator.vibrate(60);
-}
+function hitPos() { return lastHit ? new THREE.Vector3().setFromMatrixPosition(lastHit.matrix) : null; }
 
-function fixA() {
-  const p = hitPos(); if (!p) return noSurface();
-  ar.A = p; navigator.vibrate && navigator.vibrate(30);
+$('arSetA').onclick = () => {
+  const p = hitPos(); if (!p) return;
+  ar.A = p; ar.hitA = lastHit.result;
   markA.position.copy(p); markA.visible = true;
   ar.phase = 'B';
   show('arSetA', false); show('arSetB', true); show('arQuick', true);
   arStatus('A fijado. Ahora apunta al <b>punto B</b> (sobre el eje +X del modelo) y toca <b>Fijar B</b>.', 'O toca "Colocar solo en A" para orientarlo a mano.');
-}
-function fixB() {
-  const p = hitPos(); if (!ar.A) return; if (!p) return noSurface();
+};
+$('arSetB').onclick = () => {
+  const p = hitPos(); if (!p || !ar.A) return;
   const d = p.clone().sub(ar.A); d.y = 0;
   if (d.length() < 0.3) { arStatus('B está muy cerca de A (&lt; 30 cm).', 'Aléjate: la orientación es más precisa con puntos separados varios metros.'); return; }
   ar.B = p;
@@ -413,25 +351,26 @@ function fixB() {
   let sub = `Distancia medida A–B: ${meas.toFixed(2)} m`;
   if (ab > 0) sub += ` · modelo ${ab.toFixed(2)} m · diferencia ${((meas - ab) * 100).toFixed(0)} cm`;
   arStatus('Modelo calzado con A y B. Afina si hace falta.', sub);
-  navigator.vibrate && navigator.vibrate(30);
-}
-tap($('arSetA'), fixA);
-tap($('arSetB'), fixB);
-tap($('arQuick'), () => {
-  if (!ar.A) { const p = hitPos(); if (!p) return noSurface(); ar.A = p; }
+};
+$('arQuick').onclick = () => {
+  if (!ar.A) { const p = hitPos(); if (!p) return; ar.A = p; ar.hitA = lastHit.result; }
   // eje +X del modelo perpendicular a la dirección de la mirada
   const cam = renderer.xr.getCamera(); const fwd = new THREE.Vector3(); cam.getWorldDirection(fwd);
   place(Math.atan2(-fwd.z, fwd.x) - Math.PI / 2);
   arStatus('Modelo colocado en A. Gíralo con los botones hasta que calce.', 'Tip: usa la estructura existente (celeste) como referencia.');
-});
+};
 
-function place(yaw) {
+async function place(yaw) {
   ar.yaw = yaw; ar.dx = ar.dy = ar.dz = 0; ar.phase = 'done';
   // ancla (si el equipo lo permite) para reducir la deriva
   const base = new THREE.Matrix4().makeTranslation(ar.A.x, ar.A.y, ar.A.z);
   anchorGroup.matrix.copy(base); ar.baseFix = base.clone();
-  if (anchor) { try { anchor.delete(); } catch {} anchor = null; }
-  ar.anchorAtFix = null; ar.wantAnchor = true; // se crea en el próximo cuadro
+  if (ar.hitA && ar.hitA.createAnchor) {
+    try {
+      anchor = await ar.hitA.createAnchor();
+    } catch { anchor = null; }
+  }
+  if (anchor) ar.anchorAtFix = null; // se captura en el primer cuadro
   updatePlacer();
   modelRoot.visible = true; originMarker.visible = true;
   markA.visible = false; abLine.visible = false;
@@ -445,89 +384,41 @@ function updatePlacer() {
   placer.position.copy(off);
 }
 
-tap($('arRedo'), resetPlacement);
-tap($('arExit'), () => xrSession && xrSession.end());
-for (const b of document.querySelectorAll('[data-rot]')) tap(b, () => { ar.yaw += parseFloat(b.dataset.rot) * DEG; updatePlacer(); adjInfo(); });
-for (const b of document.querySelectorAll('[data-mv]')) tap(b, () => {
+$('arRedo').onclick = resetPlacement;
+for (const b of document.querySelectorAll('[data-rot]')) b.onclick = () => { ar.yaw += parseFloat(b.dataset.rot) * DEG; updatePlacer(); };
+for (const b of document.querySelectorAll('[data-mv]')) b.onclick = () => {
   const s = ar.step, k = b.dataset.mv;
   if (k === 'x+') ar.dx += s; if (k === 'x-') ar.dx -= s;
   if (k === 'z+') ar.dz -= s; if (k === 'z-') ar.dz += s;   // Y del modelo (SketchUp) = −Z en glTF
   if (k === 'y+') ar.dy += s; if (k === 'y-') ar.dy -= s;
   updatePlacer(); adjInfo();
-});
+};
 const steps = [0.01, 0.05, 0.10, 0.001];
-tap($('stepBtn'), () => { ar.step = steps[(steps.indexOf(ar.step) + 1) % steps.length]; $('stepLbl').textContent = ar.step >= 0.01 ? `${Math.round(ar.step * 100)} cm` : '1 mm'; });
-tap($('resetAdj'), () => { ar.dx = ar.dy = ar.dz = 0; updatePlacer(); adjInfo(); });
+$('stepBtn').onclick = () => { ar.step = steps[(steps.indexOf(ar.step) + 1) % steps.length]; $('stepLbl').textContent = ar.step >= 0.01 ? `${Math.round(ar.step * 100)} cm` : '1 mm'; };
+$('resetAdj').onclick = () => { ar.dx = ar.dy = ar.dz = 0; updatePlacer(); adjInfo(); };
 function adjInfo() {
-  arStatus('Ajuste fino', `ΔX ${(ar.dx * 100).toFixed(1)} cm · ΔY ${(-ar.dz * 100).toFixed(1)} cm · ΔZ ${(ar.dy * 100).toFixed(1)} cm · giro ${(ar.yaw / DEG).toFixed(1)}°`);
+  arStatus('Ajuste fino', `ΔX ${(ar.dx * 100).toFixed(1)} cm · ΔY ${(-ar.dz * 100).toFixed(1)} cm · Δaltura ${(ar.dy * 100).toFixed(1)} cm · giro ${(ar.yaw / DEG).toFixed(1)}°`);
 }
 const tabs = { tabRot: 'pRot', tabMove: 'pMove', tabView: 'pView' };
-for (const [t, p] of Object.entries(tabs)) tap($(t), () => {
+for (const [t, p] of Object.entries(tabs)) $(t).onclick = () => {
   for (const [t2, p2] of Object.entries(tabs)) { $(t2).classList.toggle('act', t2 === t); show(p2, p2 === p); }
-});
+};
 $('opProj').oninput = (e) => { state.opProj = +e.target.value; applyVisual(); };
 $('opExist').oninput = (e) => { state.opExist = +e.target.value; applyVisual(); };
-const modeNames = { ref: 'Existente: referencia', occ: 'Existente: oclusión', off: 'Existente: oculta' };
-tap($('tgExist'), () => {
-  state.existMode = { ref: 'occ', occ: 'off', off: 'ref' }[state.existMode];
-  $('tgExist').textContent = modeNames[state.existMode]; applyVisual();
-  if (state.existMode === 'occ') arStatus('Modo oclusión', 'La estructura existente del modelo queda invisible, pero tapa lo proyectado que está detrás de ella. Requiere un buen calce.');
-});
-function updDepthBtn() {
-  const b = $('tgDepth');
-  if (!state.depthAvail) { b.textContent = 'Profundidad: no disponible'; b.disabled = true; return; }
-  b.disabled = false; b.textContent = state.depthWanted ? 'Profundidad cámara: sí' : 'Profundidad cámara: no';
-}
-tap($('tgDepth'), () => { if (!state.depthAvail) return; state.depthWanted = !state.depthWanted; updDepthBtn(); });
-tap($('tgEdges'), () => { state.edgesOnly = !state.edgesOnly; $('tgEdges').textContent = state.edgesOnly ? 'Caras + aristas' : 'Solo aristas'; applyVisual(); });
-
-// ---------------------------------------------------------------- profundidad por cuadro
-let depthTex = null, depthBuf = null;
-function updateDepth(frame) {
-  occ.uDepthOn.value = 0;
-  if (!state.depthAvail || !state.depthWanted || !frame.getDepthInformation) return;
-  const vp = frame.getViewerPose(refSpace); if (!vp || !vp.views.length) return;
-  const view = vp.views[0];
-  let di = null; try { di = frame.getDepthInformation(view); } catch { state.depthWanted = false; updDepthBtn(); return; }
-  if (!di || !di.width) return;
-  const n = di.width * di.height;
-  if (!depthTex || depthTex.image.width !== di.width || depthTex.image.height !== di.height) {
-    depthBuf = new Float32Array(n);
-    depthTex = new THREE.DataTexture(depthBuf, di.width, di.height, THREE.RedFormat, THREE.FloatType);
-    depthTex.minFilter = depthTex.magFilter = THREE.NearestFilter;
-    occ.uDepthTex.value = depthTex;
-  }
-  const k = di.rawValueToMeters;
-  const src = xrSession.depthDataFormat === 'float32' ? new Float32Array(di.data) : new Uint16Array(di.data);
-  for (let i = 0; i < n; i++) depthBuf[i] = src[i] * k;
-  depthTex.needsUpdate = true;
-  occ.uUvT.value.fromArray(di.normDepthBufferFromNormView.matrix);
-  const P = view.projectionMatrix; occ.uProj.value.set(P[10], P[14]);
-  const bl = xrSession.renderState.baseLayer;
-  if (bl) { const v = bl.getViewport(view); occ.uRes.value.set(v.width, v.height); }
-  occ.uDepthOn.value = 1;
-}
+$('tgExist').onclick = () => { state.showExist = !state.showExist; $('tgExist').textContent = state.showExist ? 'Ocultar existente' : 'Mostrar existente'; applyVisual(); };
+$('tgEdges').onclick = () => { state.edgesOnly = !state.edgesOnly; $('tgEdges').textContent = state.edgesOnly ? 'Caras + aristas' : 'Solo aristas'; applyVisual(); };
 
 // ---------------------------------------------------------------- bucle
 const tmpM = new THREE.Matrix4();
-let loopErr = false;
 renderer.setAnimationLoop((t, frame) => {
-  try { tick(frame); } catch (err) {
-    console.error(err);
-    if (!loopErr) { loopErr = true; state.depthWanted = false; occ.uDepthOn.value = 0; arStatus('Se produjo un error y desactivé la profundidad.', String(err.message || err)); }
-  }
-  renderer.render(scene, camera);
-});
-function tick(frame) {
   if (frame && hitSource) {
     const hits = frame.getHitTestResults(hitSource);
     if (hits.length) {
       const pose = hits[0].getPose(refSpace);
-      lastHit = { matrix: new THREE.Matrix4().fromArray(pose.transform.matrix) };
-      goodHit = { matrix: lastHit.matrix, t: performance.now() };
+      lastHit = { matrix: new THREE.Matrix4().fromArray(pose.transform.matrix), result: hits[0] };
       reticle.matrix.copy(lastHit.matrix);
       reticle.visible = ar.phase !== 'done';
-      $('ar').classList.remove('nosurf');
+      $('arSetA').disabled = $('arSetB').disabled = $('arQuick').disabled = false;
       if (ar.phase === 'B' && ar.A) {
         const p = hitPos();
         abLine.geometry.setFromPoints([ar.A, p]); abLine.visible = true;
@@ -536,16 +427,8 @@ function tick(frame) {
       }
     } else {
       lastHit = null; reticle.visible = false;
-      $('ar').classList.add('nosurf');
+      $('arSetA').disabled = $('arSetB').disabled = $('arQuick').disabled = true;
     }
-    if (ar.wantAnchor && ar.baseFix) {
-      ar.wantAnchor = false;
-      if (frame.createAnchor && window.XRRigidTransform) {
-        const p = new THREE.Vector3().setFromMatrixPosition(ar.baseFix);
-        try { frame.createAnchor(new XRRigidTransform({ x: p.x, y: p.y, z: p.z }), refSpace).then(a => { anchor = a; ar.anchorAtFix = null; }, () => {}); } catch { /* sin anclas */ }
-      }
-    }
-    updateDepth(frame);
     // seguimiento del ancla: aplica la corrección de deriva sobre la pose fijada
     if (anchor && frame.trackedAnchors && frame.trackedAnchors.has(anchor)) {
       const ap = frame.getPose(anchor.anchorSpace, refSpace);
@@ -558,7 +441,8 @@ function tick(frame) {
   } else {
     controls.update();
   }
-}
+  renderer.render(scene, camera);
+});
 
 // ---------------------------------------------------------------- estado de red / service worker
 function net() { const b = $('netBadge'); b.textContent = navigator.onLine ? 'en línea' : 'sin conexión'; b.classList.toggle('on', true); }
@@ -583,9 +467,6 @@ $('btnReset').onclick = resetApp;
 // ---------------------------------------------------------------- inicio
 (async () => {
   resize();
-  const hv = document.documentElement.dataset.v;
-  $('netBadge').title = 'v' + APP_VERSION;
-  if (hv !== APP_VERSION) msg(`Archivos de versiones distintas (index.html v${hv || '?'}, app.js v${APP_VERSION}). Sube los 3 archivos juntos a GitHub, espera 2 minutos y recarga.`, 'warn');
   if (new URLSearchParams(location.search).has('reset')) return resetApp();
   checkXR();
   const o = await DB.get('opts');
@@ -604,4 +485,4 @@ $('btnReset').onclick = resetApp;
 })();
 
 // acceso para pruebas
-window.__ra = { state, scene, modelRoot, ar, placer, resetPlacement, occ, THREE, camera, renderer, applyVisual, fakeHit: (x, y, z) => { goodHit = { matrix: new THREE.Matrix4().makeTranslation(x, y, z), t: performance.now() }; } };
+window.__ra = { state, scene, modelRoot };
