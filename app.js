@@ -320,12 +320,13 @@ async function checkXR() {
 
 $('btnAR').onclick = async () => {
   try {
-    const session = await navigator.xr.requestSession('immersive-ar', {
-      requiredFeatures: ['hit-test'],
-      optionalFeatures: ['dom-overlay', 'anchors', 'depth-sensing'],
-      domOverlay: { root: $('ar') },
-      depthSensing: { usagePreference: ['cpu-optimized'], dataFormatPreference: ['luminance-alpha', 'float32'] },
-    });
+    const wantDepth = $('optDepth').checked;
+    const opts = { requiredFeatures: ['hit-test'], optionalFeatures: ['dom-overlay', 'anchors'], domOverlay: { root: $('ar') } };
+    if (wantDepth) {
+      opts.optionalFeatures.push('depth-sensing');
+      opts.depthSensing = { usagePreference: ['cpu-optimized'], dataFormatPreference: ['luminance-alpha', 'float32'] };
+    }
+    const session = await navigator.xr.requestSession('immersive-ar', opts);
     startAR(session);
   } catch (err) {
     console.error(err); msg('No se pudo iniciar la RA: ' + (err.message || err), 'err');
@@ -484,7 +485,7 @@ function updateDepth(frame) {
   if (!state.depthAvail || !state.depthWanted || !frame.getDepthInformation) return;
   const vp = frame.getViewerPose(refSpace); if (!vp || !vp.views.length) return;
   const view = vp.views[0];
-  let di = null; try { di = frame.getDepthInformation(view); } catch { di = null; }
+  let di = null; try { di = frame.getDepthInformation(view); } catch { state.depthWanted = false; updDepthBtn(); return; }
   if (!di || !di.width) return;
   const n = di.width * di.height;
   if (!depthTex || depthTex.image.width !== di.width || depthTex.image.height !== di.height) {
@@ -506,7 +507,15 @@ function updateDepth(frame) {
 
 // ---------------------------------------------------------------- bucle
 const tmpM = new THREE.Matrix4();
+let loopErr = false;
 renderer.setAnimationLoop((t, frame) => {
+  try { tick(frame); } catch (err) {
+    console.error(err);
+    if (!loopErr) { loopErr = true; state.depthWanted = false; occ.uDepthOn.value = 0; arStatus('Se produjo un error y desactivé la profundidad.', String(err.message || err)); }
+  }
+  renderer.render(scene, camera);
+});
+function tick(frame) {
   if (frame && hitSource) {
     const hits = frame.getHitTestResults(hitSource);
     if (hits.length) {
@@ -546,8 +555,7 @@ renderer.setAnimationLoop((t, frame) => {
   } else {
     controls.update();
   }
-  renderer.render(scene, camera);
-});
+}
 
 // ---------------------------------------------------------------- estado de red / service worker
 function net() { const b = $('netBadge'); b.textContent = navigator.onLine ? 'en línea' : 'sin conexión'; b.classList.toggle('on', true); }
