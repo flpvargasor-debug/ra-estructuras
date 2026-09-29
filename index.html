@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="es" data-v="11">
+<html lang="es" data-v="12">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
@@ -92,7 +92,7 @@
 <body>
 <div id="app">
   <header>
-    <h1>RA Estructuras <span style="font-weight:400;color:var(--mut);font-size:12px">v11</span></h1>
+    <h1>RA Estructuras <span style="font-weight:400;color:var(--mut);font-size:12px">v12</span></h1>
     <span class="badge" id="netBadge">—</span>
   </header>
   <div id="view">
@@ -133,7 +133,8 @@
       </div>
       <div class="row">
         <button class="sec" id="pVR">Gafas VR</button>
-        <button id="pShot">Guardar imagen</button>
+        <button id="pShot">Guardar vista</button>
+        <button id="pDownload">Descargar foto 360</button>
       </div>
       <div class="row">
         <button id="pChange">Cambiar foto…</button>
@@ -161,6 +162,8 @@
         <select id="optVRZoom"><option value="1">1×</option><option value="1.25">1,25×</option><option value="1.5">1,5×</option></select>
         <span>Imagen de cámara invertida</span>
         <label class="chk"><input type="checkbox" id="optVRFlip"> corregir</label>
+        <span>Resolución captura 360</span>
+        <select id="optCapRes"><option value="4096">4096 × 2048</option><option value="2048">2048 × 1024 (más rápido)</option><option value="8192">8192 × 4096 (lento)</option></select>
       </div>
       <div class="info" style="margin-top:6px">Si un OBJ aparece "acostado", cambia el eje vertical y toca Volver a aplicar. Los .dae y .glb traen unidades y ejes en el archivo.</div>
       <div class="row" style="margin-top:8px"><button id="btnReload">Volver a aplicar</button><button id="btnOrigin">Mover origen a esquina</button></div>
@@ -188,6 +191,7 @@
   <div id="cross"></div>
   <div class="top">
     <div id="arStatus">Iniciando…</div>
+    <button id="arCap">Foto 360</button>
     <button id="arVR">Gafas VR</button>
     <button id="arExit">Salir</button>
   </div>
@@ -198,6 +202,14 @@
         <button class="pri hide" id="arSetB">Fijar B</button>
         <button class="sec" id="arQuick" title="Coloca en A mirando hacia ti">Colocar solo en A</button>
       </div>
+    </div>
+    <div id="arCapPanel" class="hide">
+      <div class="row">
+        <button id="capPause">Pausar</button>
+        <button id="capReset">Reiniciar</button>
+        <button class="pri" id="capDone">Terminar y guardar</button>
+      </div>
+      <div class="row"><button id="capCancel">Cancelar captura</button></div>
     </div>
     <div id="arAdjust" class="hide">
       <div class="tabs">
@@ -240,6 +252,6 @@
   </div>
 </div>
 
-<script type="module" src="app.js?v=11"></script>
+<script type="module" src="app.js?v=12"></script>
 </body>
 </html>

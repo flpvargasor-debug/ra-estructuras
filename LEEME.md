@@ -55,3 +55,10 @@ El teléfono tiene una sola cámara, así que el fondo real se ve plano (sin 3D)
 4. Arrastra con un dedo para mirar alrededor y pellizca para acercar. **Giroscopio** te deja mirar moviendo el teléfono, y **Gafas VR** divide la pantalla.
 5. **Guardar imagen** descarga una captura en PNG para tus informes.
 La foto y el calce quedan guardados en el teléfono y se reabren con el botón Foto 360.
+
+## 8. Capturar una foto 360 esférica con la app
+1. Inicia la RA y, si quieres que la foto quede calzada sola, calza primero el modelo (A y B).
+2. Toca **Foto 360** (arriba). Gira lentamente en tu lugar, girando el teléfono sobre sí mismo. Lo ya capturado se ve en color, y la barra superior muestra el % cubierto. Cubre también el cielo y el piso.
+3. Toca **Terminar y guardar**. La foto (JPG equirectangular) se descarga, queda guardada en la app y, si el modelo estaba calzado, también su posición.
+4. Sal de la RA y toca **Foto 360** para verla con el modelo superpuesto.
+Consejos: con trípode o monopié quedan menos uniones visibles; evita gente moviéndose; si la imagen sale de cabeza, activa "Imagen de cámara invertida" en Opciones.

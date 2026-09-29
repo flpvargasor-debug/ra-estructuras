@@ -7,7 +7,7 @@ import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { MTLLoader } from 'three/addons/loaders/MTLLoader.js';
 import { StereoEffect } from 'three/addons/effects/StereoEffect.js';
 
-const APP_VERSION = '11';
+const APP_VERSION = '12';
 const $ = (id) => document.getElementById(id) || document.createElement('div'); // tolerante a un index.html desactualizado
 const DEG = Math.PI / 180;
 
@@ -355,6 +355,7 @@ async function startAR(session) {
   updDepthBtn();
 }
 function endAR() {
+  if (cap.on) capStop();
   occ.uDepthOn.value = 0;
   setStereo(false); vr.binding = null;
   hitSource = null; xrSession = null; anchor = null;
@@ -815,6 +816,7 @@ $('panoFile').onchange = async (e) => {
   catch (err) { msg('No se pudo abrir la foto: ' + (err.message || err), 'err'); }
 };
 $('pExit').onclick = panoExit;
+$('pDownload').onclick = () => { if (pano.file) downloadBlob(new Blob([pano.file.buffer], { type: 'image/jpeg' }), pano.file.name); };
 for (const id of ['pX', 'pY', 'pZ', 'pH', 'pP', 'pR']) $(id).addEventListener('input', panoApply);
 for (const b of document.querySelectorAll('[data-ph]')) b.onclick = () => { $('pH').value = (+$('pH').value + +b.dataset.ph).toFixed(1); panoApply(); };
 $('pOp').oninput = (e) => { state.opProj = +e.target.value; applyVisual(); };
@@ -832,6 +834,181 @@ $('pShot').onclick = () => {
   }, 'image/png');
 };
 
+// ---------------------------------------------------------------- CAPTURA 360 (esfera completa pintada con la cámara)
+// En cada cuadro se proyecta la imagen de la cámara sobre una textura equirectangular usando la orientación que
+// entrega la RA. Cada píxel se queda con el cuadro donde quedó más centrado (menos distorsión y mejor unión).
+const cap = { on: false, paused: false, rtA: null, rtB: null, W: 0, H: 0, frameN: 0, lastQ: null, lastT: 0,
+  posSum: new THREE.Vector3(), posN: 0, modelRot: new THREE.Matrix4(), modelInv: new THREE.Matrix4(), placed: false,
+  lastCov: 0, covT: 0, sphere: null, binding: null };
+const capMat = new THREE.ShaderMaterial({
+  uniforms: { uCam: { value: vr.camTex }, uPrev: { value: null }, uM: { value: new THREE.Matrix3() }, uP: { value: new THREE.Matrix4() }, uFlip: { value: 0 } },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+  fragmentShader: `precision highp float;
+    uniform sampler2D uCam; uniform sampler2D uPrev; uniform mat3 uM; uniform mat4 uP; uniform float uFlip; varying vec2 vUv;
+    void main(){
+      vec4 prev = texture2D(uPrev, vUv);
+      float phi = vUv.x * 6.28318530718, th = (1.0 - vUv.y) * 3.14159265359;
+      vec3 d = vec3(cos(phi) * sin(th), cos(th), sin(phi) * sin(th));   // dirección en el sistema del modelo
+      vec3 v = uM * d;                                                   // dirección en el sistema de la cámara
+      if (v.z > -0.05) { gl_FragColor = prev; return; }
+      vec4 c = uP * vec4(v, 1.0); vec2 ndc = c.xy / c.w;
+      if (abs(ndc.x) > 0.97 || abs(ndc.y) > 0.97) { gl_FragColor = prev; return; }
+      float w = max(1.0 - max(abs(ndc.x), abs(ndc.y)), 0.004);          // "centralidad" del píxel en el cuadro
+      if (w <= prev.a + 0.01) { gl_FragColor = prev; return; }
+      vec2 uv = ndc * 0.5 + 0.5; if (uFlip > 0.5) uv.y = 1.0 - uv.y;
+      gl_FragColor = vec4(texture2D(uCam, uv).rgb, w);
+    }`,
+  depthTest: false, depthWrite: false, blending: THREE.NoBlending,
+});
+const capScene = new THREE.Scene(); { const q = quad(); q.material = capMat; capScene.add(q); }
+// vista previa: la esfera pintada alrededor del usuario (semitransparente; lo que falta se ve como cámara en vivo)
+const capPrevMat = new THREE.ShaderMaterial({
+  uniforms: { tex: { value: null } },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+  fragmentShader: 'uniform sampler2D tex; varying vec2 vUv; void main(){ vec4 c = texture2D(tex, vUv); if (c.a < 0.003) discard; gl_FragColor = vec4(c.rgb, 0.6); }',
+  transparent: true, depthWrite: false, depthTest: false,
+});
+// lectura de cobertura (textura pequeña)
+const covRT = new THREE.WebGLRenderTarget(128, 64);
+const covMat = new THREE.ShaderMaterial({ uniforms: { tex: { value: null } },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+  fragmentShader: 'uniform sampler2D tex; varying vec2 vUv; void main(){ gl_FragColor = vec4(step(0.003, texture2D(tex, vUv).a)); }',
+  depthTest: false, depthWrite: false, blending: THREE.NoBlending });
+const covScene = new THREE.Scene(); { const q = quad(); q.material = covMat; covScene.add(q); }
+
+function capStart() {
+  let ok = false;
+  try { ok = !!(xrSession && xrSession.enabledFeatures && xrSession.enabledFeatures.includes('camera-access')); } catch { ok = false; }
+  if (!ok) { arStatus('Captura 360 no disponible.', $('optVR').checked ? 'Tu equipo no entrega la imagen de la cámara a la app.' : 'Activa "Permitir modo gafas VR" en Opciones y vuelve a iniciar la RA.'); return; }
+  if (vr.on) setStereo(false);
+  const W = parseInt($('optCapRes').value) || 4096, H = W / 2;
+  const mk = () => new THREE.WebGLRenderTarget(W, H, { depthBuffer: false, generateMipmaps: false, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter });
+  if (!cap.rtA || cap.W !== W) { cap.rtA && cap.rtA.dispose(); cap.rtB && cap.rtB.dispose(); cap.rtA = mk(); cap.rtB = mk(); cap.W = W; cap.H = H; }
+  capClear();
+  // sistema de referencia: el del modelo si está calzado (así la foto queda calzada sola); si no, el de la RA
+  cap.placed = ar.phase === 'done';
+  placer.updateMatrixWorld(true);
+  if (cap.placed) { cap.modelRot.extractRotation(placer.matrixWorld); cap.modelInv.copy(placer.matrixWorld).invert(); }
+  else { cap.modelRot.identity(); cap.modelInv.identity(); }
+  if (!cap.sphere) {
+    const g = new THREE.SphereGeometry(6, 64, 32); g.scale(-1, 1, 1);
+    cap.sphere = new THREE.Mesh(g, capPrevMat); cap.sphere.renderOrder = 50; cap.sphere.frustumCulled = false; scene.add(cap.sphere);
+  }
+  cap.sphere.visible = true;
+  cap.on = true; cap.paused = false; cap.lastQ = null;
+  modelRoot.visible = false; originMarker.visible = false; reticle.visible = false;
+  $('capPause').textContent = 'Pausar';
+  show('arPlace', false); show('arAdjust', false); show('arCapPanel', true);
+  arStatus('Captura 360: gira lento en tu lugar', 'Gira el teléfono sobre sí mismo (no con el brazo estirado). Cubre también arriba y abajo. Lo capturado se ve en color.');
+}
+function capClear() {
+  const prevT = renderer.getRenderTarget(), xrOn = renderer.xr.enabled;
+  renderer.xr.enabled = false;
+  renderer.setClearColor(0x000000, 0);
+  for (const rt of [cap.rtA, cap.rtB]) { renderer.setRenderTarget(rt); renderer.clear(true, false, false); }
+  renderer.setRenderTarget(prevT); renderer.xr.enabled = xrOn;
+  cap.posSum.set(0, 0, 0); cap.posN = 0; cap.lastCov = 0;
+  capPrevMat.uniforms.tex.value = cap.rtA.texture;
+}
+function capStop() {
+  cap.on = false; if (cap.sphere) cap.sphere.visible = false;
+  show('arCapPanel', false);
+  if (ar.phase === 'done') { modelRoot.visible = true; originMarker.visible = true; show('arAdjust', true); }
+  else { show('arPlace', true); }
+}
+const _vq = new THREE.Quaternion();
+function capPaint(frame, force) {
+  if (cap.paused) return;
+  const pose = frame.getViewerPose(refSpace); if (!pose || pose.emulatedPosition) return;
+  const view = pose.views[0]; if (!view.camera) return;
+  // no pintar si el teléfono gira rápido (imagen movida)
+  const now = performance.now();
+  const vm = new THREE.Matrix4().fromArray(view.transform.matrix);
+  _vq.setFromRotationMatrix(vm);
+  if (force) { /* prueba */ } else if (cap.lastQ) {
+    const speed = cap.lastQ.angleTo(_vq) / Math.max(1e-3, (now - cap.lastT) / 1000) / DEG;
+    cap.lastQ.copy(_vq); cap.lastT = now;
+    if (speed > 45) return;
+  } else { cap.lastQ = _vq.clone(); cap.lastT = now; return; }
+  if (!force && (cap.frameN++ % 2) === 1) return;   // cada 2 cuadros (rendimiento)
+  if (!cap.binding) cap.binding = new XRWebGLBinding(xrSession, renderer.getContext());
+  const glTex = cap.binding.getCameraImage(view.camera); if (!glTex) return;
+  renderer.properties.get(vr.camTex).__webglTexture = glTex;
+  // matriz: dirección del modelo -> dirección de la cámara
+  const viewRotInv = new THREE.Matrix4().extractRotation(vm).invert();
+  const M4 = new THREE.Matrix4().multiplyMatrices(viewRotInv, cap.modelRot);
+  capMat.uniforms.uM.value.setFromMatrix4(M4);
+  capMat.uniforms.uP.value.fromArray(view.projectionMatrix);
+  capMat.uniforms.uFlip.value = $('optVRFlip').checked ? 1 : 0;
+  capMat.uniforms.uCam.value = vr.camTex;
+  capMat.uniforms.uPrev.value = cap.rtA.texture;
+  const prevT = renderer.getRenderTarget();
+  renderer.xr.enabled = false;
+  renderer.setRenderTarget(cap.rtB); renderer.render(capScene, orthoCam);
+  [cap.rtA, cap.rtB] = [cap.rtB, cap.rtA];
+  capPrevMat.uniforms.tex.value = cap.rtA.texture;
+  // cobertura cada ~1 s
+  if (now - cap.covT > 1000) {
+    cap.covT = now; covMat.uniforms.tex.value = cap.rtA.texture;
+    renderer.setRenderTarget(covRT); renderer.render(covScene, orthoCam);
+    const px = new Uint8Array(128 * 64 * 4); renderer.readRenderTargetPixels(covRT, 0, 0, 128, 64, px);
+    let n = 0; for (let i = 0; i < px.length; i += 4) if (px[i] > 127) n++;
+    // ponderado por área (las filas cerca de los polos pesan menos)
+    let covW = 0, totW = 0;
+    for (let r = 0; r < 64; r++) { const wr = Math.sin((r + 0.5) / 64 * Math.PI); for (let c2 = 0; c2 < 128; c2++) { totW += wr; if (px[(r * 128 + c2) * 4] > 127) covW += wr; } }
+    cap.lastCov = covW / totW;
+    arStatus(`Captura 360: ${Math.round(cap.lastCov * 100)}% cubierto`, cap.lastCov < 0.9 ? 'Sigue girando; incluye el cielo y el piso.' : 'Casi completa. Toca "Terminar y guardar".');
+  }
+  renderer.setRenderTarget(prevT); renderer.xr.enabled = true;
+  // posición de la cámara (promedio) y esfera de vista previa centrada en el usuario
+  const wp = new THREE.Vector3().setFromMatrixPosition(vm);
+  cap.posSum.add(wp); cap.posN++;
+  cap.sphere.position.copy(wp);
+  cap.sphere.quaternion.setFromRotationMatrix(cap.modelRot);
+}
+async function capFinish() {
+  if (!cap.rtA) return;
+  cap.paused = true;
+  arStatus('Guardando foto 360…', 'Un momento.');
+  await new Promise(r => setTimeout(r, 50));
+  const W = cap.W, H = cap.H;
+  const px = new Uint8Array(W * H * 4);
+  const xrOn = renderer.xr.enabled; renderer.xr.enabled = false;
+  renderer.readRenderTargetPixels(cap.rtA, 0, 0, W, H, px);
+  renderer.xr.enabled = xrOn;
+  const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+  const ctx = cv.getContext('2d'); const img = ctx.createImageData(W, H);
+  for (let y = 0; y < H; y++) {           // WebGL lee de abajo hacia arriba: se invierten las filas
+    const src = (H - 1 - y) * W * 4, dst = y * W * 4;
+    for (let i = 0; i < W * 4; i += 4) { img.data[dst + i] = px[src + i]; img.data[dst + i + 1] = px[src + i + 1]; img.data[dst + i + 2] = px[src + i + 2]; img.data[dst + i + 3] = 255; }
+  }
+  ctx.putImageData(img, 0, 0);
+  const blob = await new Promise(r => cv.toBlob(r, 'image/jpeg', 0.92));
+  const name = `foto360_${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')}.jpg`;
+  // calibración: posición promedio de la cámara en ejes del modelo (X, Y, Z arriba)
+  let calib = { x: 0, y: 0, z: 1.5, h: 0, p: 0, r: 0 };
+  if (cap.posN) {
+    const pm = cap.posSum.clone().multiplyScalar(1 / cap.posN).applyMatrix4(cap.modelInv);
+    calib = { x: +pm.x.toFixed(3), y: +(-pm.z).toFixed(3), z: +pm.y.toFixed(3), h: 0, p: 0, r: 0 };
+  }
+  const file = { name, buffer: await blob.arrayBuffer() };
+  await DB.set('pano', { name, buffer: file.buffer, calib });
+  pano.file = null;
+  try { await panoLoad(file, calib); } catch (e) { console.error(e); }
+  downloadBlob(blob, name);
+  capStop();
+  arStatus(`Foto 360 guardada (${Math.round(cap.lastCov * 100)}% cubierto).`,
+    cap.placed ? 'Quedó calzada con el modelo. Sal de la RA y toca "Foto 360" para verla.' : 'El modelo no estaba calzado: al verla tendrás que ajustar el rumbo y la posición a mano.');
+}
+function downloadBlob(blob, name) {
+  try { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000); } catch {}
+}
+tap($('arCap'), capStart);
+tap($('capPause'), () => { cap.paused = !cap.paused; cap.lastQ = null; $('capPause').textContent = cap.paused ? 'Reanudar' : 'Pausar'; });
+tap($('capReset'), () => { capClear(); arStatus('Captura reiniciada.', 'Vuelve a girar lentamente.'); });
+tap($('capDone'), () => { capFinish().catch(e => { console.error(e); arStatus('No se pudo guardar la foto 360.', String(e.message || e)); }); });
+tap($('capCancel'), () => { capStop(); arStatus('Captura cancelada.'); });
+
 // ---------------------------------------------------------------- bucle
 const tmpM = new THREE.Matrix4();
 let loopErr = false;
@@ -841,6 +1018,9 @@ renderer.setAnimationLoop((t, frame) => {
     if (!loopErr) { loopErr = true; state.depthWanted = false; occ.uDepthOn.value = 0; arStatus('Se produjo un error y desactivé la profundidad.', String(err.message || err)); }
   }
   if (!frame && pano.on && pano.vr) { stereo.setEyeSeparation((parseFloat($('optIPD').value) || 64) / 1000); stereo.render(scene, camera); return; }
+  if (cap.on && frame) {
+    try { capPaint(frame); } catch (err) { console.error(err); capStop(); arStatus('Error en la captura 360.', String(err.message || err)); }
+  }
   if (vr.on && frame) {
     try { if (renderStereo(frame)) return; } catch (err) { console.error(err); setStereo(false); arStatus('No se pudo dibujar el modo gafas.', String(err.message || err)); }
   }
@@ -935,4 +1115,4 @@ $('btnReset').onclick = resetApp;
 })();
 
 // acceso para pruebas
-window.__ra = { pano, panoLoad, panoEnter, panoExit, testStereo: (sess, frame) => { const prev = xrSession, prevRef = refSpace; xrSession = sess; try { return renderStereo(frame); } finally { xrSession = prev; refSpace = prevRef; vr.binding = null; } }, state, scene, modelRoot, ar, placer, resetPlacement, occ, THREE, camera, renderer, applyVisual, fakeHit: (x, y, z) => { goodHit = { matrix: new THREE.Matrix4().makeTranslation(x, y, z), t: performance.now() }; } };
+window.__ra = { capPaint, capFinish, capTestInit: (W) => { const mk = () => new THREE.WebGLRenderTarget(W, W / 2, { depthBuffer: false }); cap.rtA = mk(); cap.rtB = mk(); cap.W = W; cap.H = W / 2; capClear(); cap.modelRot.identity(); cap.modelInv.identity(); cap.placed = true; const g = new THREE.SphereGeometry(6, 32, 16); g.scale(-1, 1, 1); cap.sphere = new THREE.Mesh(g, capPrevMat); cap.sphere.visible = false; scene.add(cap.sphere); }, cap, capMat, capScene, orthoCam, vr, pano, panoLoad, panoEnter, panoExit, testStereo: (sess, frame) => { const prev = xrSession, prevRef = refSpace; xrSession = sess; try { return renderStereo(frame); } finally { xrSession = prev; refSpace = prevRef; vr.binding = null; } }, state, scene, modelRoot, ar, placer, resetPlacement, occ, THREE, camera, renderer, applyVisual, fakeHit: (x, y, z) => { goodHit = { matrix: new THREE.Matrix4().makeTranslation(x, y, z), t: performance.now() }; } };
