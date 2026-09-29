@@ -6,7 +6,7 @@ import { ColladaLoader } from 'three/addons/loaders/ColladaLoader.js';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { MTLLoader } from 'three/addons/loaders/MTLLoader.js';
 
-const APP_VERSION = '9';
+const APP_VERSION = '10';
 const $ = (id) => document.getElementById(id) || document.createElement('div'); // tolerante a un index.html desactualizado
 const DEG = Math.PI / 180;
 
@@ -56,7 +56,7 @@ const state = {
   files: [],            // [{name, buffer:ArrayBuffer}]
   name: '',
   existMeshes: [], projMeshes: [], edges: [],
-  opProj: 0.85, opExist: 0.35, existMode: 'ref', edgesOnly: false, depthWanted: true,
+  opProj: 0.85, opExist: 0.35, existMode: 'ref', edgesOnly: false, depthWanted: true, useAnchor: true, hideOnLost: true,
 };
 const msgs = $('msgs');
 function msg(text, kind = '') {
@@ -379,6 +379,7 @@ function tap(el, fn) {
 }
 
 function resetPlacement() {
+  placer.visible = true;
   ar.phase = 'A'; ar.A = ar.B = null; ar.yaw = ar.dx = ar.dy = ar.dz = 0;
   if (anchor) { try { anchor.delete(); } catch {} anchor = null; }
   anchorGroup.matrix.identity(); updatePlacer();
@@ -430,6 +431,7 @@ tap($('arQuick'), () => {
 });
 
 function place(yaw) {
+  trk.lost = false; placer.visible = true;
   ar.yaw = yaw; ar.dx = ar.dy = ar.dz = 0; ar.phase = 'done';
   // ancla (si el equipo lo permite) para reducir la deriva
   const base = new THREE.Matrix4().makeTranslation(ar.A.x, ar.A.y, ar.A.z);
@@ -482,6 +484,11 @@ function updDepthBtn() {
   if (!state.depthAvail) { b.textContent = 'Profundidad: no disponible'; b.disabled = true; return; }
   b.disabled = false; b.textContent = state.depthWanted ? 'Profundidad cámara: sí' : 'Profundidad cámara: no';
 }
+tap($('tgAnchor'), () => {
+  state.useAnchor = !state.useAnchor;
+  $('tgAnchor').textContent = state.useAnchor ? 'Ancla: sí' : 'Ancla: no';
+  if (!state.useAnchor && ar.baseFix) anchorGroup.matrix.copy(ar.baseFix); // vuelve a la posición fijada, sin correcciones
+});
 tap($('tgDepth'), () => { if (!state.depthAvail) return; state.depthWanted = !state.depthWanted; updDepthBtn(); });
 tap($('tgEdges'), () => { state.edgesOnly = !state.edgesOnly; $('tgEdges').textContent = state.edgesOnly ? 'Caras + aristas' : 'Solo aristas'; applyVisual(); });
 
@@ -624,6 +631,37 @@ function renderStereo(frame) {
   return true;
 }
 
+// ---------------------------------------------------------------- estabilidad
+// Las correcciones del ancla se filtran: saltos mínimos (ruido) se ignoran; correcciones reales se aplican suavemente.
+const _p0 = new THREE.Vector3(), _q0 = new THREE.Quaternion(), _s0 = new THREE.Vector3();
+const _p1 = new THREE.Vector3(), _q1 = new THREE.Quaternion(), _s1 = new THREE.Vector3();
+function smoothAnchor(target) {
+  anchorGroup.matrix.decompose(_p0, _q0, _s0);
+  target.decompose(_p1, _q1, _s1);
+  const d = _p0.distanceTo(_p1), ang = _q0.angleTo(_q1);
+  if (d > 1.0) { anchorGroup.matrix.copy(target); return; }            // salto grande: relocalización, se acepta de una vez
+  if (d < 0.015 && ang < 0.4 * DEG) return;                            // ruido: se ignora (modelo quieto)
+  _p0.lerp(_p1, 0.12); _q0.slerp(_q1, 0.12);
+  anchorGroup.matrix.compose(_p0, _q0, _s0);
+}
+// Si el teléfono pierde el seguimiento (cámara tapada, poca textura, movimiento brusco), se oculta el modelo en vez de dejarlo "flotar".
+const trk = { lost: false, since: 0 };
+function trackingCheck(frame) {
+  if (ar.phase !== 'done') return;
+  let lost = false;
+  try { const vp = frame.getViewerPose(refSpace); lost = !vp || vp.emulatedPosition; } catch { lost = false; }
+  const now = performance.now();
+  if (lost && !trk.lost) { trk.lost = true; trk.since = now; }
+  if (!lost && trk.lost) {
+    trk.lost = false; placer.visible = true;
+    if (!vr.on) arStatus('Seguimiento recuperado.', 'Si el modelo quedó corrido, usa Recalzar.');
+  }
+  if (trk.lost && now - trk.since > 250 && placer.visible) {
+    placer.visible = !state.hideOnLost;
+    if (!vr.on) arStatus('⚠ Seguimiento perdido', 'No tapes la cámara. Apunta a zonas con textura y buena luz, y muévete lento.');
+  }
+}
+
 // ---------------------------------------------------------------- bucle
 const tmpM = new THREE.Matrix4();
 let loopErr = false;
@@ -666,14 +704,15 @@ function tick(frame) {
     }
     updateDepth(frame);
     // seguimiento del ancla: aplica la corrección de deriva sobre la pose fijada
-    if (anchor && frame.trackedAnchors && frame.trackedAnchors.has(anchor)) {
+    if (anchor && state.useAnchor && frame.trackedAnchors && frame.trackedAnchors.has(anchor)) {
       const ap = frame.getPose(anchor.anchorSpace, refSpace);
       if (ap) {
         const now = tmpM.fromArray(ap.transform.matrix);
         if (!ar.anchorAtFix) ar.anchorAtFix = now.clone().invert().multiply(ar.baseFix); // relación ancla→A
-        anchorGroup.matrix.multiplyMatrices(now, ar.anchorAtFix);
+        smoothAnchor(new THREE.Matrix4().multiplyMatrices(now, ar.anchorAtFix));
       }
     }
+    trackingCheck(frame);
   } else {
     controls.update();
   }
