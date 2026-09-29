@@ -66,6 +66,8 @@
   #ar .tabs button.act{background:var(--acc2);border-color:var(--acc2)}
   #ar input[type=range]{width:100%}
   #ar .hide{display:none!important}
+  #ar.nosurf #arPlace button{opacity:.6}
+  #ar button{touch-action:manipulation;user-select:none;-webkit-user-select:none}
   #cross{position:absolute;left:50%;top:50%;width:26px;height:26px;margin:-13px 0 0 -13px;pointer-events:none;opacity:.8}
   #cross:before,#cross:after{content:"";position:absolute;background:#fff;box-shadow:0 0 2px #000}
   #cross:before{left:12px;top:0;width:2px;height:26px}
@@ -141,9 +143,9 @@
   <div class="bottom">
     <div id="arPlace">
       <div class="row">
-        <button class="pri" id="arSetA" disabled>Fijar A</button>
-        <button class="pri hide" id="arSetB" disabled>Fijar B</button>
-        <button class="sec" id="arQuick" disabled title="Coloca en A mirando hacia ti">Colocar solo en A</button>
+        <button class="pri" id="arSetA">Fijar A</button>
+        <button class="pri hide" id="arSetB">Fijar B</button>
+        <button class="sec" id="arQuick" title="Coloca en A mirando hacia ti">Colocar solo en A</button>
       </div>
     </div>
     <div id="arAdjust" class="hide">
@@ -165,7 +167,7 @@
         <div class="grid">
           <button data-mv="x-">X −</button><button data-mv="x+">X +</button>
           <button data-mv="z-">Y −</button><button data-mv="z+">Y +</button>
-          <button data-mv="y-">Bajar</button><button data-mv="y+">Subir</button>
+          <button data-mv="y-">Z −</button><button data-mv="y+">Z +</button>
           <button id="stepBtn">Paso</button><button id="resetAdj">Reset</button>
         </div>
       </div>
@@ -175,8 +177,11 @@
         <div class="lbl">Opacidad existente</div>
         <input type="range" id="opExist" min="0" max="1" step="0.05" value="0.35">
         <div class="row" style="margin-top:6px">
-          <button id="tgExist">Ocultar existente</button>
+          <button id="tgExist">Existente: referencia</button>
           <button id="tgEdges">Solo aristas</button>
+        </div>
+        <div class="row" style="margin-top:6px">
+          <button id="tgDepth">Profundidad: —</button>
         </div>
       </div>
     </div>
